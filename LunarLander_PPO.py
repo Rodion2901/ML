@@ -5,18 +5,19 @@ import torch
 from torch.distributions import Categorical
 import numpy as np
 import gymnasium as gym
+import os
 
 class ActorCritic(nn.Module):
     def __init__(self,state_dim, action_dim):
         super(ActorCritic, self).__init__()
         self.affine = nn.Sequential(
-            nn.Linear(state_dim, 128),
+            nn.Linear(state_dim, 256),
             nn.ReLU(),
-            nn.Linear(128,128),
+            nn.Linear(256,256),
             nn.ReLU()
         )
-        self.action_layer = nn.Linear(128,action_dim)
-        self.value_layer = nn.Linear(128,1)
+        self.action_layer = nn.Linear(256,action_dim)
+        self.value_layer = nn.Linear(256,1)
 
     def forward(self,state):
         state = self.affine(state)
@@ -42,13 +43,15 @@ class PPOAgent:
 
         self.MseLos = nn.MSELoss()
 
-    def select_action(self, state):
+    def select_action(self, state, train = True):
         state = torch.FloatTensor(state).unsqueeze(0)
         with torch.no_grad():
             probs, _ = self.police_old(state)
         dist = Categorical(probs)
-        action = dist.sample()
-
+        if train:
+            action = dist.sample()
+        else:
+            return torch.argmax(probs).item()
         return action.item(), dist.log_prob(action).item()
     
     def update(self, memory):
@@ -79,11 +82,12 @@ class PPOAgent:
             ratios = torch.exp(logprobs - old_logprobs.detach())
 
             advantages = rewards - state_values.detach()
+            advantages = (advantages - advantages.mean()) / (advantages.std() + 1e-8)
 
             surr1 = ratios * advantages
             surr2 = torch.clamp(ratios, 1 - self.eps_clip, 1 + self.eps_clip) * advantages
 
-            loss = -torch.min(surr1, surr2) + 0.5 *self.MseLos(state_values, rewards)
+            loss = -torch.min(surr1, surr2) + 0.5 *self.MseLos(state_values, rewards) - 0.01 * dist_entropy
             self.optimizer.zero_grad()
             loss.mean().backward()
             self.optimizer.step()
@@ -101,7 +105,7 @@ class Memory:
     def clear(self):
         del self.actions[:], self.states[:], self.logprobs[:], self.rewards[:], self.is_terminals[:]
 
-def train():
+def train(episodes):
     env = gym.make("LunarLander-v3")
     state_dim = env.observation_space.shape[0]
     action_dim = env.action_space.n
@@ -109,11 +113,10 @@ def train():
     agent = PPOAgent(state_dim, action_dim)
     memory = Memory()
 
-    max_episodes = 1000
     update_timestep = 2000
     time_step = 0
 
-    for episode in range(1, max_episodes+1):
+    for episode in range(1, episodes+1):
         state, _ = env.reset()
         current_ep_reward = 0
 
@@ -137,9 +140,38 @@ def train():
                 time_step = 0
             if done or truncated:
                 break
-        
+        if episode % 1000 == 0:
+                save_checkpoint(agent, episode)
         if episode % 100 == 0:
             print(f"Episode {episode} \t Reward: {current_ep_reward:.2f}")
     return agent
 
-train()
+def test_PPO(agent):
+    test_episodes = 10
+    env = gym.make("LunarLander-v3", render_mode = "human")
+    reward_history = []
+    for episode in range(1,test_episodes+1):
+        state, _ = env.reset()
+        done = False
+        total_reward = 0
+        while not done:
+            action = agent.select_action(state, train = False)
+            next_state, reward, trum, tern, _ = env.step(action)
+            total_reward += reward
+            state = next_state
+            done = trum or tern
+        reward_history.append(total_reward)
+        print(f"episode:{episode} \t reward:{total_reward:.2f}")
+
+def save_checkpoint(agent, episodes):
+    name_folder = "LunarLander_PPO"
+    name_file = f"save_ep_{episodes}.pth"
+    if not os.path.exists(name_folder):
+        os.makedirs(name_folder)
+    path = os.path.join(name_folder, name_file)
+    checkpoint = agent.police.state_dict()
+    torch.save(checkpoint, path)
+    print("Save is done")
+
+agent = train(episodes=3000)
+test_PPO(agent)
