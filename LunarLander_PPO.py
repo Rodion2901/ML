@@ -8,7 +8,7 @@ import gymnasium as gym
 
 class ActorCritic(nn.Module):
     def __init__(self,state_dim, action_dim):
-        super(ActorCritic, self).__init()
+        super(ActorCritic, self).__init__()
         self.affine = nn.Sequential(
             nn.Linear(state_dim, 128),
             nn.ReLU(),
@@ -49,7 +49,7 @@ class PPOAgent:
         dist = Categorical(probs)
         action = dist.sample()
 
-        return action.item(), dist.log_prob(action).item
+        return action.item(), dist.log_prob(action).item()
     
     def update(self, memory):
         old_states = torch.FloatTensor(np.array(memory.states))
@@ -62,38 +62,38 @@ class PPOAgent:
         for reward, is_terminal in zip(reversed(memory.rewards), reversed(memory.is_terminals)):
             if is_terminal:
                 discounted_reward = 0
-            discounted_reward = reward + (self.gamma, discounted_reward)
-            reward.insert(0, discounted_reward)
+            discounted_reward = reward + (self.gamma * discounted_reward)
+            rewards.insert(0, discounted_reward)
 
-            rewards = torch.FloatTensor(rewards)
-            rewards = (rewards - rewards.mean())/ (rewards.std() + 1e-7)
+        rewards = torch.FloatTensor(rewards)
+        rewards = (rewards - rewards.mean())/ (rewards.std() + 1e-7)
 
-            for _ in range(self.Kepochs):
-                probs, state_values = self.police(old_states)
-                state_values = torch.squeeze(state_values)
+        for _ in range(self.K_epochs):
+            probs, state_values = self.police(old_states)
+            state_values = torch.squeeze(state_values)
 
-                dist = Categorical(probs)
-                logprobs = dist.log_prob(old_actions)
-                dist_entropy = dist.entropy()
+            dist = Categorical(probs)
+            logprobs = dist.log_prob(old_actions)
+            dist_entropy = dist.entropy()
 
-                ratios = torch.exp(logprobs - old_logprobs.detach())
+            ratios = torch.exp(logprobs - old_logprobs.detach())
 
-                advantages = rewards - state_values.detach()
+            advantages = rewards - state_values.detach()
 
-                surr1 = ratios * advantages
-                surr2 = torch.clap(ratios, 1 - self.eps_clip, 1 + self.eps_clip) * advantages
+            surr1 = ratios * advantages
+            surr2 = torch.clamp(ratios, 1 - self.eps_clip, 1 + self.eps_clip) * advantages
 
-                loss = -torch.min(surr1, surr2) + 0.5 *self.MseLos(state_values, rewards)
-                self.optimizer.zero_grad()
-                loss.mean().backward()
-                self.optimizer.step()
+            loss = -torch.min(surr1, surr2) + 0.5 *self.MseLos(state_values, rewards)
+            self.optimizer.zero_grad()
+            loss.mean().backward()
+            self.optimizer.step()
 
-            self.police_old.load_state_dict(self.police.state_dict())
+        self.police_old.load_state_dict(self.police.state_dict())
 
 class Memory:
-    def __init_(self):
-        self.actions = []
+    def __init__(self):
         self.states = []
+        self.actions = []
         self.logprobs = []
         self.rewards = []
         self.is_terminals = []
@@ -120,7 +120,7 @@ def train():
         for t in range(1,1000):
             time_step+=1
             action, log_prob = agent.select_action(state)
-            next_state, reward, done, truncated, = env.step(action)
+            next_state, reward, done, truncated, _ = env.step(action)
 
             memory.states.append(state)
             memory.actions.append(action)
@@ -141,3 +141,5 @@ def train():
         if episode % 100 == 0:
             print(f"Episode {episode} \t Reward: {current_ep_reward:.2f}")
     return agent
+
+train()
