@@ -6,6 +6,7 @@ from torch.distributions import Categorical
 import numpy as np
 import gymnasium as gym
 import os
+import matplotlib.pyplot as plt
 
 class ActorCritic(nn.Module):
     def __init__(self,state_dim, action_dim):
@@ -30,7 +31,7 @@ class ActorCritic(nn.Module):
 
 class PPOAgent:
     def __init__(self, state_dim, action_dim):
-        self.gamma = 0.99
+        self.gamma = 0.975
         self.lmbda = 0.95
         self.eps_clip = 0.2
         self.K_epochs = 4
@@ -69,7 +70,7 @@ class PPOAgent:
             rewards.insert(0, discounted_reward)
 
         rewards = torch.FloatTensor(rewards)
-        rewards = (rewards - rewards.mean())/ (rewards.std() + 1e-7)
+        rewards = (rewards - rewards.mean())/ (rewards.std() + 1e-8)
 
         for _ in range(self.K_epochs):
             probs, state_values = self.police(old_states)
@@ -105,18 +106,21 @@ class Memory:
     def clear(self):
         del self.actions[:], self.states[:], self.logprobs[:], self.rewards[:], self.is_terminals[:]
 
-def train(episodes):
+def train(start_episode, episodes, continuation = False):
     env = gym.make("LunarLander-v3")
     state_dim = env.observation_space.shape[0]
     action_dim = env.action_space.n
-
     agent = PPOAgent(state_dim, action_dim)
-    memory = Memory()
+    reward_history = []
+    if continuation:
+        reward_history = load_checkpoint(file_name = f"save_ep_{start_episode}.pth")
 
+        
+    memory = Memory()
     update_timestep = 2000
     time_step = 0
 
-    for episode in range(1, episodes+1):
+    for episode in range(start_episode, episodes+1):
         state, _ = env.reset()
         current_ep_reward = 0
 
@@ -138,13 +142,14 @@ def train(episodes):
                 agent.update(memory)
                 memory.clear()
                 time_step = 0
-            if done or truncated:
+            if (done or truncated) or ((t == 200) and (episode >3000)):
                 break
-        if episode % 1000 == 0:
-                save_checkpoint(agent, episode)
+        reward_history.append(current_ep_reward)
         if episode % 100 == 0:
             print(f"Episode {episode} \t Reward: {current_ep_reward:.2f}")
-    return agent
+        if episode % 1000 == 0:
+            save_checkpoint(agent, episode, reward_history)
+    return agent, reward_history
 
 def test_PPO(agent):
     test_episodes = 10
@@ -161,17 +166,33 @@ def test_PPO(agent):
             state = next_state
             done = trum or tern
         reward_history.append(total_reward)
-        print(f"episode:{episode} \t reward:{total_reward:.2f}")
+        print(f"Test episode:{episode} \t reward:{total_reward:.2f}")
+    env.close()
 
-def save_checkpoint(agent, episodes):
+def save_checkpoint(agent, episodes, reward_history):
     name_folder = "LunarLander_PPO"
     name_file = f"save_ep_{episodes}.pth"
     if not os.path.exists(name_folder):
         os.makedirs(name_folder)
     path = os.path.join(name_folder, name_file)
-    checkpoint = agent.police.state_dict()
+    checkpoint = {'police': agent.police.state_dict(),
+                  'reward_history' : reward_history}
     torch.save(checkpoint, path)
     print("Save is done")
+def load_checkpoint(file_name):
+    name_folder = "LunarLander_PPO"
+    path = os.path.join(name_folder, file_name)
+    if os.path.isfile(path):
+        checkpoint = torch.load(path)
+        agent.police.load_state_dict(checkpoint['police'])
+        reward_history = checkpoint[checkpoint['reward_history']]
+    return reward_history
+def matplot(reward_hitory):
+    a = [i for i in range(len(reward_hitory))]
+    plt.plot(a, reward_history)
+    plt.show() 
 
-agent = train(episodes=3000)
+
+agent, reward_history = train(start_episode=1, episodes=4000)
+matplot(reward_history)
 test_PPO(agent)
