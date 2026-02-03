@@ -42,19 +42,21 @@ class DQNAgent:
         self.batch_size = 32
 
 
-    def act(self, state):
-        if np.random.rand() < self.epsilon:
+    def act(self, state, train=True):
+        if train and (np.random.rand() < self.epsilon):
             return random.randrange(self.action_size)
         state = torch.FloatTensor(state).unsqueeze(0)
         with torch.no_grad():
             q_values = self.q_network(state)
-
         return torch.argmax(q_values).item()
+    
     def remember(self, state, action, reward, next_state, done):
         self.memory.push(state, action, reward, next_state, done)
+    
     def replay(self):
-        if self.batch_size > len(self.memory):
+        if len(self.memory) < self.batch_size:
             return
+        
         states, actions, rewards, next_states, dones = self.memory.sample(self.batch_size)
 
         states = torch.FloatTensor(states)
@@ -64,9 +66,11 @@ class DQNAgent:
         dones = torch.FloatTensor(dones)
 
         current_q = self.q_network(states).gather(1, actions.unsqueeze(1)).squeeze(1)
+        
         with torch.no_grad():
-            target = self.target_network(next_states).max(1)[0]
-            target_q = rewards + (self.gamma*target*(1-dones))
+            next_q = self.target_network(next_states)
+            target = next_q.max(1)[0]
+            target_q = rewards + (self.gamma * target * (1 - dones))
 
         loss = F.mse_loss(current_q, target_q)
 
@@ -76,7 +80,9 @@ class DQNAgent:
 
         if self.epsilon > self.epsilon_min:
             self.epsilon *= self.epsilon_decay
+        
         self.update_count += 1
+        
         if self.update_count % self.taget_update == 0:
             self.target_network.load_state_dict(self.q_network.state_dict())
 
@@ -88,8 +94,10 @@ def encode_one_hot(state, state_size):
 class ReplayBuffer:
     def __init__(self,capacity):
         self.buffer = deque(maxlen=capacity)
+    
     def push(self, state, action, reward, next_state, done):
         self.buffer.append((state, action, reward, next_state, done))
+    
     def sample(self, batch_size):
         batch = random.sample(self.buffer, batch_size)
         states, actions, rewards, next_states, dones = zip(*batch)
@@ -103,10 +111,8 @@ class ReplayBuffer:
     def __len__(self):
         return len(self.buffer)
 
-
-
-def train_dqn(name = "FrozenLake-v1", episodes = 1000):
-    env = gym.make(name, map_name = "4x4", is_slippery = False, render_mode = "human")
+def train_dqn(name="FrozenLake-v1", episodes=1000):
+    env = gym.make(name, map_name="4x4", is_slippery=False)
 
     state_size = env.observation_space.n
     action_size = env.action_space.n
@@ -120,27 +126,66 @@ def train_dqn(name = "FrozenLake-v1", episodes = 1000):
         total_reward = 0
         state, _ = env.reset()
         state = encode_one_hot(state, state_size)
+        
         while not done:
-            
-            action = agent.act(state)
+            action = agent.act(state, train=True)
 
-            next_state, reward, tern, trum, _= env.step(action)
+            next_state, reward, terminated, truncated, _ = env.step(action)
+            done = terminated or truncated
 
             next_state = encode_one_hot(next_state, state_size)
-            done = trum or tern
 
             agent.remember(state, action, reward, next_state, done)
             agent.replay()
+            
             state = next_state
             total_reward += reward
 
         reward_history.append(total_reward)
+        
         if (episode+1) % 100 == 0:
             avg_reward = np.mean(reward_history[-100:])
-            success_rate = np.mean([1 if r>0 else 0 for r in reward_history[-100:]])
+            success_rate = np.mean([1 if r > 0 else 0 for r in reward_history[-100:]])
 
             print(
-                f"episode: {episode+1}",
-                f"success_rate: {success_rate:.2%}",
+                f"Episode: {episode+1}, "
+                f"Avg Reward: {avg_reward:.3f}, "
+                f"Success Rate: {success_rate:.2%}, "
+                f"Epsilon: {agent.epsilon:.3f}"
             )
-train_dqn()
+    
+    return agent
+
+def test_dqn(agent, test_episodes=10):
+    env = gym.make("FrozenLake-v1", map_name="4x4", is_slippery=False, render_mode="human")
+    state_size = env.observation_space.n
+    reward_history = []
+    
+    for episode in range(test_episodes):
+        done = False
+        total_reward = 0
+        state, _ = env.reset()
+        state = encode_one_hot(state, state_size)
+        
+        while not done:
+            action = agent.act(state, train=False)
+
+            next_state, reward, terminated, truncated, _ = env.step(action)
+            done = terminated or truncated
+
+            next_state = encode_one_hot(next_state, state_size)
+            state = next_state
+            total_reward += reward
+        
+        reward_history.append(total_reward)
+        print(f"Test Episode {episode+1}: Reward = {total_reward}")
+    
+    success_rate = np.mean([1 if r > 0 else 0 for r in reward_history])
+    print(f"\nTest Results:")
+    print(f"Success Rate: {success_rate:.2%}")
+    print(f"Average Reward: {np.mean(reward_history):.3f}")
+    
+    env.close()
+
+agent = train_dqn(episodes=1000)
+test_dqn(agent, test_episodes=10)
